@@ -8,19 +8,22 @@ import datetime
 
 TRADIER_BASE_URL = "https://api.tradier.com/v1/markets"
 DATABASE_NAME = "tradier_market_data.db"
+TARGETS_TABLE = "monitoring_targets"
 
 # Global flag for debug printing
-ENABLE_OPTION_DEBUG = False
+ENABLE_OPTION_DEBUG = False # Keep this as global for options data
+GLOBAL_DEBUG_ENABLED = False # New global flag for general script debugging
 DEBUG_TARGET_OPTION = None
 
 def print_debug(message):
     # Only print debug messages if ENABLE_OPTION_DEBUG is True and it's for the target option
-    if ENABLE_OPTION_DEBUG:
-        print(f"DEBUG: {datetime.datetime.now().isoformat()} - {message}")
+    # or if GLOBAL_DEBUG_ENABLED is true for general messages
+    if ENABLE_OPTION_DEBUG or GLOBAL_DEBUG_ENABLED:
+        print(f"DEBUG: {datetime.datetime.now().isoformat()} - {message}", file=sys.stderr) # Send debug to stderr
 
 def init_db():
     """
-    Initializes the SQLite database and creates tables for stocks and options.
+    Initializes the SQLite database and creates tables for stocks, options, and monitoring targets.
     """
     conn = sqlite3.connect(DATABASE_NAME)
     cursor = conn.cursor()
@@ -63,6 +66,17 @@ def init_db():
             currency TEXT,
             source TEXT,
             fetch_timestamp TEXT NOT NULL
+        )
+    """)
+
+    # Create monitoring targets table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS monitoring_targets (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            symbol TEXT NOT NULL UNIQUE,
+            type TEXT NOT NULL, -- 'stock' or 'option'
+            active BOOLEAN NOT NULL DEFAULT 1,
+            added_timestamp TEXT NOT NULL
         )
     """)
     conn.commit()
@@ -142,7 +156,7 @@ def parse_option_symbol(option_symbol: str):
     # Note: Tradier OCC symbols can have varying strike price formats. 
     # The '0038000' format means $380.00. The last three digits are decimals.
     # OCC format: SYMBOL + YYMMDD + Call/Put + STRIKE_PRICE (5 digits before decimal, 3 after)
-    match = re.match(r"([A-Z]+)(\d{6})([CP])(\d{5})(\d{3})", option_symbol) # Changed \d{7} to \d{8} total strike digits here
+    match = re.match(r"([A-Z]+)(\d{6})([CP])(\d{5})(\d{3})", option_symbol) 
     if not match:
         print_debug(f"No regex match for option symbol in parse_option_symbol: {option_symbol}")
         return None, None, None, None
@@ -150,10 +164,9 @@ def parse_option_symbol(option_symbol: str):
     underlying_symbol = match.group(1)
     expiration_raw = match.group(2)
     option_type = 'put' if match.group(3) == 'P' else 'call'
-    # strike_whole = match.group(4) # This was \d{4}
-    # strike_fraction = match.group(5) # This was \d{3}
-    # Now with \d{8} it's just one group for strike_raw
-    strike_raw_digits = match.group(4) + match.group(5) # Recombine to 8 digits
+    strike_whole = match.group(4) 
+    strike_fraction = match.group(5) 
+    strike_raw_digits = strike_whole + strike_fraction
 
     # Reconstruct expiration date as YYYY-MM-DD
     year = "20" + expiration_raw[:2]
@@ -161,9 +174,7 @@ def parse_option_symbol(option_symbol: str):
     day = expiration_raw[4:6]
     expiration_date = f"{year}-{month}-{day}"
 
-    # Convert strike price (e.g., 00380 + 000 -> 380.000)
-    # The strike_raw_digits is now '00380000' for 380.000
-    # Need to handle the 3 decimal places correctly
+    # Convert strike price (e.g., 00380000 for 380.000)
     try:
         strike_price = float(strike_raw_digits) / 1000.0
     except ValueError:
@@ -177,10 +188,9 @@ def fetch_option_data(api_key: str, option_symbol: str):
     """
     Fetches data for a specific option symbol by first getting the option chain.
     """
-    global ENABLE_OPTION_DEBUG
+    global ENABLE_OPTION_DEBUG, DEBUG_TARGET_OPTION # Declare both globals
     original_enable_debug = ENABLE_OPTION_DEBUG # Save original state
     
-    # Temporarily enable debug for this option if it's the target
     if DEBUG_TARGET_OPTION and option_symbol == DEBUG_TARGET_OPTION:
         ENABLE_OPTION_DEBUG = True
 
@@ -196,12 +206,11 @@ def fetch_option_data(api_key: str, option_symbol: str):
         "Accept": "application/json"
     }
 
-    # First, get the option chain for the underlying and expiration
     chain_endpoint = f"{TRADIER_BASE_URL}/options/chains"
     chain_params = {
         "symbol": underlying_symbol,
         "expiration": expiration_date,
-        "greeks": "true" # Fetch Greeks for options
+        "greeks": "true" 
     }
 
     try:
@@ -215,16 +224,13 @@ def fetch_option_data(api_key: str, option_symbol: str):
         if 'options' in chain_data and chain_data['options'] and 'option' in chain_data['options']:
             options_list = chain_data['options']['option']
             
-            # Ensure options_list is always a list for consistent iteration
             if isinstance(options_list, dict):
                 options_list = [options_list]
 
             for option in options_list:
                 print_debug(f"Checking option in chain: Symbol={option.get('symbol')}, Type={option.get('option_type')}, Strike={option.get('strike')}")
 
-                # Match option type and strike price
                 if option.get('option_type') == option_type and abs(option.get('strike') - strike_price) < 0.001:
-                    # Found the specific option
                     print_debug(f"Matching option found: {option.get('symbol')}")
                     option_result = {
                         "symbol": option['symbol'],
@@ -263,38 +269,106 @@ def fetch_option_data(api_key: str, option_symbol: str):
         ENABLE_OPTION_DEBUG = original_enable_debug # Restore debug state
         return None
     finally:
-        ENABLE_OPTION_DEBUG = original_enable_debug # Ensure debug state is restored even on unhandled errors
+        ENABLE_OPTION_DEBUG = original_enable_debug 
 
-def fetch_tradier_data(active_items_json, debug_option_symbol=None):
-    global ENABLE_OPTION_DEBUG, DEBUG_TARGET_OPTION
+def get_active_monitor_targets(status_filter: str = 'all'):
+    conn = sqlite3.connect(DATABASE_NAME)
+    cursor = conn.cursor()
+    query = f"SELECT symbol, type, active FROM {TARGETS_TABLE}"
+    params = []
+
+    if status_filter == 'active':
+        query += " WHERE active = 1"
+    elif status_filter == 'inactive':
+        query += " WHERE active = 0"
     
+    cursor.execute(query, params)
+    rows = cursor.fetchall()
+    conn.close()
+    
+    targets = []
+    for row in rows:
+        targets.append({"symbol": row[0], "type": row[1], "active": bool(row[2])})
+    return targets
+
+def add_monitor_target(symbol: str, target_type: str):
+    conn = sqlite3.connect(DATABASE_NAME)
+    cursor = conn.cursor()
+    added_timestamp = datetime.datetime.now().isoformat()
+    try:
+        cursor.execute("""
+            INSERT INTO monitoring_targets (symbol, type, active, added_timestamp)
+            VALUES (?, ?, ?, ?)
+        """, (symbol.upper(), target_type, 1, added_timestamp))
+        conn.commit()
+        conn.close()
+        return {"message": f"Target {symbol.upper()} ({target_type}) added successfully."}
+    except sqlite3.IntegrityError:
+        conn.close()
+        return {"error": f"Target {symbol.upper()} already exists."}
+    except Exception as e:
+        conn.close()
+        return {"error": f"Failed to add target {symbol.upper()}: {e}"}
+
+def remove_monitor_target(symbol: str):
+    conn = sqlite3.connect(DATABASE_NAME)
+    cursor = conn.cursor()
+    cursor.execute(f"DELETE FROM {TARGETS_TABLE} WHERE symbol = ?", (symbol.upper(),))
+    conn.commit()
+    rows_affected = cursor.rowcount
+    conn.close()
+    if rows_affected > 0:
+        return {"message": f"Target {symbol.upper()} removed successfully."}
+    return {"error": f"Target {symbol.upper()} not found."}
+
+def set_target_active_status(symbol: str, active: bool):
+    conn = sqlite3.connect(DATABASE_NAME)
+    cursor = conn.cursor()
+    cursor.execute(f"UPDATE {TARGETS_TABLE} SET active = ? WHERE symbol = ?", (1 if active else 0, symbol.upper()))
+    conn.commit()
+    rows_affected = cursor.rowcount
+    conn.close()
+    if rows_affected > 0:
+        status = "activated" if active else "deactivated"
+        return {"message": f"Target {symbol.upper()} {status}."}
+    return {"error": f"Target {symbol.upper()} not found."}
+
+def fetch_tradier_data(debug_option_symbol=None, global_debug_enabled=False):
+    global ENABLE_OPTION_DEBUG, DEBUG_TARGET_OPTION, GLOBAL_DEBUG_ENABLED
+    
+    # Preserve original state
+    original_enable_option_debug = ENABLE_OPTION_DEBUG
+    original_debug_target_option = DEBUG_TARGET_OPTION
+    original_global_debug_enabled = GLOBAL_DEBUG_ENABLED
+
+    # Apply temporary debug settings
+    GLOBAL_DEBUG_ENABLED = global_debug_enabled
     if debug_option_symbol:
         ENABLE_OPTION_DEBUG = True
         DEBUG_TARGET_OPTION = debug_option_symbol
     
     api_key = os.environ.get('TRADIER_API_KEY')
     if not api_key:
-        print("Error: TRADIER_API_KEY environment variable not set.") # Keep this as print for critical error
-        sys.exit(1)
+        print("Error: TRADIER_API_KEY environment variable not set.", file=sys.stderr)
+        # Restore original state before returning
+        ENABLE_OPTION_DEBUG = original_enable_option_debug
+        DEBUG_TARGET_OPTION = original_debug_target_option
+        GLOBAL_DEBUG_ENABLED = original_global_debug_enabled
+        return {"error": "TRADIER_API_KEY environment variable not set."}, 500
 
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Accept": "application/json"
     }
 
-    try:
-        active_items = json.loads(active_items_json)
-    except json.JSONDecodeError:
-        print("Error: Invalid JSON input for active monitor items.") # Keep this as print for critical error
-        sys.exit(1)
+    active_items = get_active_monitor_targets(status_filter='active')
 
     stock_symbols_to_fetch = []
     option_symbols_to_fetch = []
     
     for item in active_items:
-        symbol = item['symbol'].strip() # Apply strip() here
-        # Corrected heuristic to distinguish stock vs. option: use \d{8} for the strike digits
-        if re.match(r"^[A-Z]+\d{6}[CP]\d{8}$", symbol):
+        symbol = item['symbol'].strip() 
+        if re.match(r"^[A-Z]+\d{6}[CP]\d{8}$", symbol): 
             option_symbols_to_fetch.append(symbol)
         else:
             stock_symbols_to_fetch.append(symbol)
@@ -302,7 +376,7 @@ def fetch_tradier_data(active_items_json, debug_option_symbol=None):
     print_debug(f"Symbols categorized: Stocks={stock_symbols_to_fetch}, Options={option_symbols_to_fetch}")
 
     all_fetched_data = {
-        "timestamp": datetime.datetime.now().isoformat(), # Use current time for overall fetch
+        "timestamp": datetime.datetime.now().isoformat(), 
         "data": []
     }
     current_fetch_timestamp = datetime.datetime.now().isoformat()
@@ -339,7 +413,7 @@ def fetch_tradier_data(active_items_json, debug_option_symbol=None):
                             "fetch_timestamp": current_fetch_timestamp
                         }
                         all_fetched_data["data"].append(stock_entry)
-                        save_stock_data(stock_entry) # Save to DB
+                        save_stock_data(stock_entry) 
         except requests.exceptions.RequestException as e:
             print_debug(f"Error fetching stock quotes from Tradier: {e}")
         except Exception as e:
@@ -352,50 +426,103 @@ def fetch_tradier_data(active_items_json, debug_option_symbol=None):
         if option_data:
             option_data["fetch_timestamp"] = current_fetch_timestamp
             all_fetched_data["data"].append(option_data)
-            save_option_data(option_data) # Save to DB
+            save_option_data(option_data) 
         else:
             print_debug(f"Could not retrieve data for option: {option_symbol}")
-            # Optionally, you might want to add a placeholder or error entry for this option
 
     print(json.dumps(all_fetched_data, indent=2))
+    # Restore original state before returning
+    ENABLE_OPTION_DEBUG = original_enable_option_debug
+    DEBUG_TARGET_OPTION = original_debug_target_option
+    GLOBAL_DEBUG_ENABLED = original_global_debug_enabled
+    return all_fetched_data, 200 
 
 if __name__ == '__main__':
-    init_db() # Initialize the database at script start
+    init_db() 
 
-    # Parse additional command-line arguments for debugging
     debug_option_symbol = None
-    args_to_pass = []
-    i = 1
-    while i < len(sys.argv):
-        if sys.argv[i] == "--debug-option" and i + 1 < len(sys.argv):
-            debug_option_symbol = sys.argv[i+1]
-            i += 2 # Skip the option symbol
-        else:
-            args_to_pass.append(sys.argv[i])
-            i += 1
+    global_debug_enabled_from_cli = False # New flag to control general debug from CLI
+    args_to_process = sys.argv[1:] 
 
-    if len(args_to_pass) > 0:
-        command = args_to_pass[0]
-        if command == "fetch":
-            if len(args_to_pass) > 1:
-                active_items_json = args_to_pass[1]
-                fetch_tradier_data(active_items_json, debug_option_symbol)
-            else:
-                print("Usage: python fetch_tradier_data.py fetch '<active_monitor_items_json>'")
-                sys.exit(1)
-        elif command == "query":
-            if len(args_to_pass) > 1:
-                table = args_to_pass[1]
-                symbol = args_to_pass[2] if len(args_to_pass) > 2 else None
-                limit = int(args_to_pass[3]) if len(args_to_pass) > 3 else 10
-                results = query_saved_data(table, symbol, limit)
-                print(json.dumps(results, indent=2))
-            else:
-                print("Usage: python fetch_tradier_data.py query <table_name> [symbol] [limit]")
-                sys.exit(1)
+    temp_args = [] # Use a temporary list to rebuild args after processing debug flags
+    i = 0
+    while i < len(args_to_process):
+        if args_to_process[i] == "--debug-option" and i + 1 < len(args_to_process):
+            debug_option_symbol = args_to_process[i + 1]
+            i += 2 
+        elif args_to_process[i] == "--global-debug": # New CLI flag for global debug
+            global_debug_enabled_from_cli = True
+            i += 1
         else:
-            print("Unknown command. Use 'fetch' or 'query'.")
+            temp_args.append(args_to_process[i])
+            i += 1
+    args_to_process = temp_args # Update args_to_process without debug flags
+
+    # Set global debug based on CLI flag
+    GLOBAL_DEBUG_ENABLED = global_debug_enabled_from_cli
+
+    if len(args_to_process) == 0:
+        print("Usage: python fetch_tradier_data.py <command> ... [--debug-option <symbol>] [--global-debug]", file=sys.stderr)
+        sys.exit(1)
+
+    command = args_to_process[0]
+    command_args = args_to_process[1:]
+
+    if command == "init-db":
+        print(json.dumps({"message": "Database initialized successfully."}))
+        sys.exit(0)
+    elif command == "fetch":
+        data, status = fetch_tradier_data(debug_option_symbol=debug_option_symbol, global_debug_enabled=global_debug_enabled_from_cli)
+        if status != 200:
+            sys.exit(1) 
+    elif command == "query":
+        if len(command_args) > 0:
+            table = command_args[0]
+            symbol = command_args[1] if len(command_args) > 1 else None
+            limit = int(command_args[2]) if len(command_args) > 2 else 10
+            results = query_saved_data(table, symbol, limit)
+            print(json.dumps(results, indent=2))
+        else:
+            print("Usage: python fetch_tradier_data.py query <table_name> [symbol] [limit]", file=sys.stderr)
+            sys.exit(1)
+    elif command == "add-target":
+        if len(command_args) == 2:
+            symbol = command_args[0]
+            target_type = command_args[1]
+            result = add_monitor_target(symbol, target_type)
+            print(json.dumps(result))
+        else:
+            print("Usage: python fetch_tradier_data.py add-target <symbol> <type>", file=sys.stderr)
+            sys.exit(1)
+    elif command == "remove-target":
+        if len(command_args) == 1:
+            symbol = command_args[0]
+            result = remove_monitor_target(symbol)
+            print(json.dumps(result))
+        else:
+            print("Usage: python fetch_tradier_data.py remove-target <symbol>", file=sys.stderr)
+            sys.exit(1)
+    elif command == "list-targets":
+        status_filter = command_args[0] if len(command_args) > 0 else 'all'
+        results = get_active_monitor_targets(status_filter)
+        print(json.dumps({"targets": results}, indent=2))
+    elif command == "activate-target":
+        if len(command_args) == 1:
+            symbol = command_args[0]
+            result = set_target_active_status(symbol, True)
+            print(json.dumps(result))
+        else:
+            print("Usage: python fetch_tradier_data.py activate-target <symbol>", file=sys.stderr)
+            sys.exit(1)
+    elif command == "deactivate-target":
+        if len(command_args) == 1:
+            symbol = command_args[0]
+            result = set_target_active_status(symbol, False)
+            print(json.dumps(result))
+        else:
+            print("Usage: python fetch_tradier_data.py deactivate-target <symbol>", file=sys.stderr)
             sys.exit(1)
     else:
-        print("Usage: python fetch_tradier_data.py <command> ... [--debug-option <symbol>]")
+        print("Unknown command. Use 'init-db', 'fetch', 'query', 'add-target', 'remove-target', 'list-targets', 'activate-target', 'deactivate-target'.", file=sys.stderr)
         sys.exit(1)
+
