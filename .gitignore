@@ -1,0 +1,8 @@
+# Python virtual environment
+.venv/
+
+# Node.js modules
+web_interface/node_modules/
+
+# Log files
+*.log

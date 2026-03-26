@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Authentication & Account Management - Tradier API Console</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <h1>Authentication & Account Management</h1>
+        <p><a href="menu.html">Back to Menu</a></p>
+
+        <div class="section">
+            <h2>Global Settings</h2>
+            <label for="apiAuthToken">API Authentication Token:</label>
+            <input type="text" id="apiAuthToken" placeholder="Enter your API_AUTH_TOKEN here">
+            <button onclick="saveApiToken()">Save Token</button>
+            <p><em>This token will be used for all authenticated requests. It is saved in your browser's local storage.</em></p>
+        </div>
+
+        <div class="section">
+            <h3>User Registration (POST /api/register)</h3>
+            <label for="regUsername">Username:</label>
+            <input type="text" id="regUsername" placeholder="Enter username">
+            <label for="regPassword">Password:</label>
+            <input type="password" id="regPassword" placeholder="Enter password">
+            <label for="regPhoneNumber">Phone Number:</label>
+            <input type="text" id="regPhoneNumber" placeholder="e.g., +11234567890">
+            <label for="regEmail">Email (optional):</label>
+            <input type="text" id="regEmail" placeholder="e.g., user@example.com">
+            <button onclick="registerUser()">Register</button>
+            <div id="response-register" class="response-area"></div>
+        </div>
+
+        <div class="section">
+            <h3>User Login (POST /api/login)</h3>
+            <label for="loginUsername">Username:</label>
+            <input type="text" id="loginUsername" placeholder="Enter username">
+            <label for="loginPassword">Password:</label>
+            <input type="password" id="loginPassword" placeholder="Enter password">
+            <button onclick="loginUser()">Login</button>
+            <div id="response-login" class="response-area"></div>
+        </div>
+
+        <div class="section">
+            <h3>Enable TOTP (POST /api/enable-totp)</h3>
+            <label for="enableTotpUsername">Username:</label>
+            <input type="text" id="enableTotpUsername" placeholder="Enter username">
+            <button onclick="enableTotp()">Enable TOTP</button>
+            <div id="response-enable-totp" class="response-area"></div>
+            <p><strong>TOTP Secret:</strong> <span id="totpSecret"></span></p>
+            <p><strong>Provisioning URI:</strong> <a id="provisioningUri" href="#" target="_blank"></a></p>
+            <p><em>Use the secret/URI with your authenticator app (e.g., Proton Authenticator).</em></p>
+        </div>
+
+        <div class="section">
+            <h3>Verify TOTP Setup (POST /api/verify-totp-setup)</h3>
+            <label for="verifyTotpSetupUsername">Username:</label>
+            <input type="text" id="verifyTotpSetupUsername" placeholder="Enter username">
+            <label for="verifyTotpSetupCode">TOTP Code:</label>
+            <input type="text" id="verifyTotpSetupCode" placeholder="Enter 6-digit code">
+            <button onclick="verifyTotpSetup()">Verify TOTP Setup</button>
+            <div id="response-verify-totp-setup" class="response-area"></div>
+        </div>
+
+        <div class="section">
+            <h3>Login with TOTP (POST /api/totp-verify)</h3>
+            <label for="totpLoginUsername">Username:</label>
+            <input type="text" id="totpLoginUsername" placeholder="Enter username">
+            <label for="totpLoginPassword">Password:</label>
+            <input type="password" id="totpLoginPassword" placeholder="Enter password">
+            <label for="totpLoginCode">TOTP Code:</label>
+            <input type="text" id="totpLoginCode" placeholder="Enter 6-digit code">
+            <button onclick="totpLogin()">Login with TOTP</button>
+            <div id="response-totp-login" class="response-area"></div>
+        </div>
+
+    </div>
+
+    <script src="app.js"></script>
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const savedToken = localStorage.getItem('apiAuthToken');
+            if (savedToken) {
+                document.getElementById('apiAuthToken').value = savedToken;
+            }
+        });
+
+        function saveApiToken() {
+            const token = document.getElementById('apiAuthToken').value;
+            if (token) {
+                localStorage.setItem('apiAuthToken', token);
+                alert('API Token saved to local storage!');
+            } else {
+                localStorage.removeItem('apiAuthToken');
+                alert('API Token cleared from local storage.');
+            }
+        }
+
+        async function registerUser() {
+            const username = document.getElementById('regUsername').value;
+            const password = document.getElementById('regPassword').value;
+            const phoneNumber = document.getElementById('regPhoneNumber').value;
+            const email = document.getElementById('regEmail').value;
+
+            if (!username || !password || !phoneNumber) {
+                alert('Username, Password, and Phone Number are required!');
+                return;
+            }
+            const body = { username, password, phone_number: phoneNumber, email };
+            const response = await makeRequest(`${API_BASE_URL}/api/register`, 'POST', body);
+            displayResponse('response-register', response);
+        }
+
+        async function loginUser() {
+            const username = document.getElementById('loginUsername').value;
+            const password = document.getElementById('loginPassword').value;
+
+            if (!username || !password) {
+                alert('Username and Password are required!');
+                return;
+            }
+            const body = { username, password };
+            const response = await makeRequest(`${API_BASE_URL}/api/login`, 'POST', body);
+            displayResponse('response-login', response);
+        }
+
+        async function enableTotp() {
+            const username = document.getElementById('enableTotpUsername').value;
+            if (!username) {
+                alert('Username is required to enable TOTP!');
+                return;
+            }
+            const body = { username };
+            const response = await makeRequest(`${API_BASE_URL}/api/enable-totp`, 'POST', body);
+            displayResponse('response-enable-totp', response);
+            if (response.status === 200) {
+                document.getElementById('totpSecret').textContent = response.data.secret;
+                document.getElementById('provisioningUri').href = response.data.provisioning_uri;
+                document.getElementById('provisioningUri').textContent = "View QR Code";
+            }
+        }
+
+        async function verifyTotpSetup() {
+            const username = document.getElementById('verifyTotpSetupUsername').value;
+            const code = document.getElementById('verifyTotpSetupCode').value;
+            if (!username || !code) {
+                alert('Username and TOTP code are required!');
+                return;
+            }
+            const body = { username, code };
+            const response = await makeRequest(`${API_BASE_URL}/api/verify-totp-setup`, 'POST', body);
+            displayResponse('response-verify-totp-setup', response);
+        }
+
+        async function totpLogin() {
+            const username = document.getElementById('totpLoginUsername').value;
+            const password = document.getElementById('totpLoginPassword').value;
+            const code = document.getElementById('totpLoginCode').value;
+
+            if (!username || !password || !code) {
+                alert('Username, Password, and TOTP code are required!');
+                return;
+            }
+            const body = { username, password, code };
+            const response = await makeRequest(`${API_BASE_URL}/api/totp-verify`, 'POST', body);
+            displayResponse('response-totp-login', response);
+        }
+    </script>
+</body>
+</html>

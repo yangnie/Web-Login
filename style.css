@@ -1,0 +1,38 @@
+body { font-family: Arial, sans-serif; margin: 20px; background-color: #f4f4f4; color: #333; }
+.container { max-width: 900px; margin: auto; background: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+h1, h2 { color: #0056b3; }
+.section { margin-bottom: 30px; padding: 15px; border: 1px solid #ddd; border-radius: 5px; background-color: #fdfdfd; }
+.section h3 { margin-top: 0; color: #555; }
+label { display: block; margin-bottom: 5px; font-weight: bold; }
+input[type="text"], input[type="number"], input[type="password"], select {
+    width: calc(100% - 22px); padding: 10px; margin-bottom: 10px; border: 1px solid #ccc; border-radius: 4px;
+}
+button {
+    background-color: #007bff; color: white; padding: 10px 15px; border: none; border-radius: 4px; cursor: pointer; font-size: 16px;
+    margin-right: 10px;
+}
+button:hover { background-color: #0056b3; }
+textarea { width: calc(100% - 22px); height: 150px; padding: 10px; border: 1px solid #ccc; border-radius: 4px; resize: vertical; background-color: #eee; }
+.response-area {
+    background-color: #e2e2e2; padding: 15px; border-radius: 4px; margin-top: 15px;
+    white-space: pre-wrap; word-wrap: break-word; font-family: "Courier New", Courier, monospace;
+}
+.error { color: red; font-weight: bold; }
+
+/* Additional style for menu items (copied from menu.html) */
+.menu-item {
+    display: block;
+    background-color: #007bff;
+    color: white;
+    padding: 15px 20px;
+    margin: 10px 0;
+    border: none;
+    border-radius: 5px;
+    cursor: pointer;
+    font-size: 18px;
+    text-decoration: none; /* Remove underline from links */
+    transition: background-color 0.2s ease;
+}
+.menu-item:hover {
+    background-color: #0056b3;
+}

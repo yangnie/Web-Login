@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Market Data - Tradier API Console</title>
+    <link rel="stylesheet" href="style.css"> <!-- Assuming a shared stylesheet -->
+</head>
+<body>
+    <div class="container">
+        <h1>Market Data</h1>
+        <p><a href="menu.html">Back to Menu</a></p>
+
+        <div class="section">
+            <h3>7. Fetch Market Data (POST /api/fetch)</h3>
+            <button onclick="fetchMarketData()">Fetch Market Data</button>
+            <div id="response-fetch-data" class="response-area"></div>
+        </div>
+
+        <div class="section">
+            <h3>8. Query Saved Data (GET /api/query/&lt;table_name&gt;)</h3>
+            <label for="queryTable">Table Name:</label>
+            <select id="queryTable">
+                <option value="stocks">stocks</option>
+                <option value="options">options</option>
+            </select>
+            <label for="querySymbol">Symbol (optional):</label>
+            <input type="text" id="querySymbol" placeholder="e.g., TSLA">
+            <label for="queryLimit">Limit (optional, default 10):</label>
+            <input type="number" id="queryLimit" value="10">
+            <button onclick="querySavedData()">Query Data</button>
+            <div id="response-query-data" class="response-area"></div>
+        </div>
+
+    </div>
+
+    <script src="app.js"></script> <!-- Shared JavaScript file -->
+    <script>
+        // Re-bind actions specific to this page
+        document.querySelector('.section:nth-of-type(1) button').onclick = fetchMarketData;
+        document.querySelector('.section:nth-of-type(2) button').onclick = querySavedData;
+
+        // You might want to pre-fill the API token from local storage here if you implement it
+        // const apiAuthToken = localStorage.getItem('apiAuthToken');
+        // if (apiAuthToken) { document.getElementById('apiAuthToken').value = apiAuthToken; }
+
+        // Initial fetch if needed, maybe not ideal for sub-pages
+        // window.onload = () => fetchMarketData();
+    </script>
+</body>
+</html>

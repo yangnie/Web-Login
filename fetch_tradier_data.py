@@ -23,7 +23,7 @@ def print_debug(message):
 
 def init_db():
     """
-    Initializes the SQLite database and creates tables for stocks, options, and monitoring targets.
+    Initializes the SQLite database and creates tables for stocks, options, monitoring targets, and users.
     """
     conn = sqlite3.connect(DATABASE_NAME)
     cursor = conn.cursor()
@@ -79,8 +79,102 @@ def init_db():
             added_timestamp TEXT NOT NULL
         )
     """)
+
+    # Create users table for authentication
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT NOT NULL UNIQUE,
+            password_hash TEXT NOT NULL,
+            phone_number TEXT NOT NULL UNIQUE,
+            email TEXT,
+            sms_2fa_code TEXT,
+            sms_2fa_code_expiry TEXT,
+            totp_secret TEXT,
+            registered_at TEXT NOT NULL
+        )
+    """)
+
     conn.commit()
     conn.close()
+
+
+def add_user(username, password_hash, phone_number, email=None):
+    """
+    Adds a new user to the 'users' table.
+    """
+    conn = sqlite3.connect(DATABASE_NAME)
+    cursor = conn.cursor()
+    registered_at = datetime.datetime.now().isoformat()
+    try:
+        cursor.execute("""
+            INSERT INTO users (username, password_hash, phone_number, email, registered_at)
+            VALUES (?, ?, ?, ?, ?)
+        """, (username, password_hash, phone_number, email, registered_at))
+        conn.commit()
+        conn.close()
+        return {"message": f"User {username} registered successfully."}, 200
+    except sqlite3.IntegrityError as e:
+        conn.close()
+        if "username" in str(e):
+            return {"error": f"Username {username} already exists."}, 409
+        elif "phone_number" in str(e):
+            return {"error": f"Phone number {phone_number} is already registered."}, 409
+        return {"error": f"Failed to register user: {e}"}, 500
+    except Exception as e:
+        conn.close()
+        return {"error": f"An unexpected error occurred during user registration: {e}"}, 500
+
+def find_user_by_username(username):
+    """
+    Finds a user by their username.
+    """
+    conn = sqlite3.connect(DATABASE_NAME)
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, username, password_hash, phone_number, email, sms_2fa_code, sms_2fa_code_expiry, totp_secret FROM users WHERE username = ?", (username,))
+    user_data = cursor.fetchone()
+    conn.close()
+
+    if user_data:
+        columns = [description[0] for description in cursor.description]
+        return dict(zip(columns, user_data))
+    return None
+
+def update_user_totp_secret(username, totp_secret):
+    """
+    Updates the TOTP secret for a given user.
+    """
+    conn = sqlite3.connect(DATABASE_NAME)
+    cursor = conn.cursor()
+    cursor.execute("UPDATE users SET totp_secret = ? WHERE username = ?", (totp_secret, username))
+    conn.commit()
+    rows_affected = cursor.rowcount
+    conn.close()
+    return rows_affected > 0
+
+def update_user_2fa_code(username, code, expiry_time):
+    """
+    Updates the 2FA code and its expiry for a given user.
+    """
+    conn = sqlite3.connect(DATABASE_NAME)
+    cursor = conn.cursor()
+    cursor.execute("UPDATE users SET sms_2fa_code = ?, sms_2fa_code_expiry = ? WHERE username = ?", (code, expiry_time.isoformat(), username))
+    conn.commit()
+    rows_affected = cursor.rowcount
+    conn.close()
+    return rows_affected > 0
+
+def clear_user_2fa_code(username):
+    """
+    Clears the 2FA code and its expiry for a given user.
+    """
+    conn = sqlite3.connect(DATABASE_NAME)
+    cursor = conn.cursor()
+    cursor.execute("UPDATE users SET sms_2fa_code = NULL, sms_2fa_code_expiry = NULL WHERE username = ?", (username,))
+    conn.commit()
+    rows_affected = cursor.rowcount
+    conn.close()
+    return rows_affected > 0
 
 def save_stock_data(data):
     """
@@ -522,7 +616,66 @@ if __name__ == '__main__':
         else:
             print("Usage: python fetch_tradier_data.py deactivate-target <symbol>", file=sys.stderr)
             sys.exit(1)
+    # --- New User Management Commands ---
+    elif command == "add-user":
+        if len(command_args) >= 3:
+            username = command_args[0]
+            password_hash = command_args[1]
+            phone_number = command_args[2]
+            email = command_args[3] if len(command_args) > 3 else None
+            result, status = add_user(username, password_hash, phone_number, email)
+            print(json.dumps(result))
+            if status != 200:
+                sys.exit(1)
+        else:
+            print("Usage: python fetch_tradier_data.py add-user <username> <password_hash> <phone_number> [email]", file=sys.stderr)
+            sys.exit(1)
+    elif command == "find-user":
+        if len(command_args) == 1:
+            username = command_args[0]
+            user = find_user_by_username(username)
+            if user:
+                print(json.dumps(user))
+            else:
+                print(json.dumps({"error": f"User {username} not found."}))
+                sys.exit(1)
+        else:
+            print("Usage: python fetch_tradier_data.py find-user <username>", file=sys.stderr)
+            sys.exit(1)
+    elif command == "update-user-sms-2fa-code":
+        if len(command_args) == 3:
+            username = command_args[0]
+            code = command_args[1]
+            expiry_time_str = command_args[2]
+            expiry_time = datetime.datetime.fromisoformat(expiry_time_str)
+            success = update_user_2fa_code(username, code, expiry_time)
+            print(json.dumps({"success": success}))
+            if not success:
+                sys.exit(1)
+        else:
+            print("Usage: python fetch_tradier_data.py update-user-sms-2fa-code <username> <code> <expiry_time_iso>", file=sys.stderr)
+            sys.exit(1)
+    elif command == "clear-sms-2fa-code":
+        if len(command_args) == 1:
+            username = command_args[0]
+            success = clear_user_2fa_code(username)
+            print(json.dumps({"success": success}))
+            if not success:
+                sys.exit(1)
+        else:
+            print("Usage: python fetch_tradier_data.py clear-sms-2fa-code <username>", file=sys.stderr)
+            sys.exit(1)
+    elif command == "update-user-totp-secret":
+        if len(command_args) == 2:
+            username = command_args[0]
+            totp_secret = command_args[1]
+            success = update_user_totp_secret(username, totp_secret)
+            print(json.dumps({"success": success}))
+            if not success:
+                sys.exit(1)
+        else:
+            print("Usage: python fetch_tradier_data.py update-user-totp-secret <username> <totp_secret>", file=sys.stderr)
+            sys.exit(1)
     else:
-        print("Unknown command. Use 'init-db', 'fetch', 'query', 'add-target', 'remove-target', 'list-targets', 'activate-target', 'deactivate-target'.", file=sys.stderr)
+        print("Unknown command. Use 'init-db', 'fetch', 'query', 'add-target', 'remove-target', 'list-targets', 'activate-target', 'deactivate-target', 'add-user', 'find-user', 'update-user-sms-2fa-code', 'clear-sms-2fa-code', 'update-user-totp-secret'.", file=sys.stderr)
         sys.exit(1)
-

@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Monitoring Targets - Tradier API Console</title>
+    <link rel="stylesheet" href="style.css"> <!-- Assuming a shared stylesheet -->
+</head>
+<body>
+    <div class="container">
+        <h1>Monitoring Targets</h1>
+        <p><a href="menu.html">Back to Menu</a></p>
+
+        <div class="section">
+            <h3>3. Add Monitoring Target (POST /api/target)</h3>
+            <label for="addSymbol">Symbol:</label>
+            <input type="text" id="addSymbol" placeholder="e.g., MSFT">
+            <label for="addType">Type:</label>
+            <select id="addType">
+                <option value="stock">stock</option>
+                <option value="option">option</option>
+            </select>
+            <button onclick="addMonitorTarget()">Add Target</button>
+            <div id="response-add-target" class="response-area"></div>
+        </div>
+
+        <div class="section">
+            <h3>4. List Monitoring Targets (GET /api/targets)</h3>
+            <label for="listStatus">Status Filter:</label>
+            <select id="listStatus">
+                <option value="">all</option>
+                <option value="active">active</option>
+                <option value="inactive">inactive</option>
+            </select>
+            <button onclick="listMonitorTargets()">List Targets</button>
+            <div id="response-list-targets" class="response-area"></div>
+        </div>
+
+        <div class="section">
+            <h3>5. Deactivate/Activate Target (POST /api/target/&lt;symbol&gt;/&lt;action&gt;)</h3>
+            <label for="toggleSymbol">Symbol:</label>
+            <input type="text" id="toggleSymbol" placeholder="e.g., MSFT">
+            <label for="toggleAction">Action:</label>
+            <select id="toggleAction">
+                <option value="activate">activate</option>
+                <option value="deactivate">deactivate</option>
+            </select>
+            <button onclick="toggleTargetStatus()">Perform Action</button>
+            <div id="response-toggle-target" class="response-area"></div>
+        </div>
+
+        <div class="section">
+            <h3>6. Remove Monitoring Target (DELETE /api/target)</h3>
+            <label for="removeSymbol">Symbol:</label>
+            <input type="text" id="removeSymbol" placeholder="e.g., MSFT">
+            <button onclick="removeMonitorTarget()">Remove Target</button>
+            <div id="response-remove-target" class="response-area"></div>
+        </div>
+
+    </div>
+
+    <script src="app.js"></script> <!-- Shared JavaScript file -->
+    <script>
+        // Re-bind actions specific to this page
+        document.querySelector('.section:nth-of-type(1) button').onclick = addMonitorTarget;
+        document.querySelector('.section:nth-of-type(2) button').onclick = listMonitorTargets;
+        document.querySelector('.section:nth-of-type(3) button').onclick = toggleTargetStatus;
+        document.querySelector('.section:nth-of-type(4) button').onclick = removeMonitorTarget;
+    </script>
+</body>
+</html>

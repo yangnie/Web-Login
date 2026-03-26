@@ -2,11 +2,15 @@ import os
 import json
 import subprocess
 import sys
-from flask import Flask, request, jsonify
+import random
+import bcrypt
+from flask import Flask, request, jsonify, send_from_directory, redirect, url_for
 from functools import wraps
 import datetime
+import pyotp # Import pyotp
 
-app = Flask(__name__)
+
+app = Flask(__name__, static_folder='.', static_url_path='')
 
 # --- Debug Configuration ---
 DEBUG_API = True # Set to True to enable debug prints for api_server.py
@@ -19,8 +23,14 @@ def print_api_debug(message):
 API_AUTH_TOKEN = os.environ.get('API_AUTH_TOKEN')
 FETCH_SCRIPT_PATH = os.path.join(os.path.dirname(__file__), 'fetch_tradier_data.py')
 
-# --- Helper for running subprocess commands ---
-def run_fetch_script(command, *args):
+# Twilio Configuration
+
+
+
+
+
+# --- Helper for running subprocess commands (for data fetching and user management) ---
+def run_db_script(command, *args):
     cmd = ['python3', FETCH_SCRIPT_PATH, command] + list(args)
     print_api_debug(f"Executing fetch_tradier_data.py command: {' '.join(cmd)}")
     try:
@@ -37,9 +47,14 @@ def run_fetch_script(command, *args):
     except subprocess.CalledProcessError as e:
         error_message = f"Script execution failed for command {command}: {e}\nStdout: {e.stdout}\nStderr: {e.stderr}"
         print_api_debug(f"ERROR during script execution: {error_message}")
-        return {"error": error_message}, 500
-    except json.JSONDecodeError:
-        error_message = f"Failed to decode JSON from script output for command {command}. Raw output: {result.stdout}"
+        try:
+            # Attempt to parse error output if it's JSON
+            error_details = json.loads(e.stdout.strip() or e.stderr.strip())
+            return error_details, e.returncode if e.returncode != 0 else 500
+        except json.JSONDecodeError:
+            return {"error": error_message}, 500
+    except json.JSONDecodeError as e:
+        error_message = f"Failed to decode JSON from script output for command {command}. Raw output: {result.stdout}. Error: {e}"
         print_api_debug(f"ERROR decoding JSON: {error_message}")
         return {"error": error_message}, 500
     except Exception as e:
@@ -74,10 +89,9 @@ def token_required(f):
 # --- API Endpoints ---
 
 @app.route('/', methods=['GET'])
-def index():
+def serve_menu():
     print_api_debug("Received request for /")
-    return jsonify({"message": "Tradier Market Data API. Use /api/fetch, /api/query, /api/targets, etc."})
-
+    return send_from_directory('.', 'menu.html')
 @app.route('/api/fetch', methods=['POST'])
 @token_required
 def fetch_data_endpoint():
@@ -102,7 +116,7 @@ def query_data_endpoint(table_name):
         args.append(symbol)
     args.append(str(limit))
 
-    result, status_code = run_fetch_script('query', *args)
+    result, status_code = run_db_script('query', *args)
     print_api_debug(f"Response from /api/query/{table_name}: Status={status_code}, Result={result}")
     return jsonify(result), status_code
 
@@ -114,7 +128,7 @@ def list_targets_endpoint():
     args = []
     if status_filter:
         args.append(status_filter)
-    result, status_code = run_fetch_script('list-targets', *args)
+    result, status_code = run_db_script('list-targets', *args)
     print_api_debug(f"Response from /api/targets: Status={status_code}, Result={result}")
     return jsonify(result), status_code
 
@@ -134,7 +148,7 @@ def manage_target_endpoint():
             print_api_debug(f"Invalid target type: {target_type}")
             return jsonify({"error": "Invalid target 'type'. Must be 'stock' or 'option'."}), 400
         
-        result, status_code = run_fetch_script('add-target', symbol, target_type)
+        result, status_code = run_db_script('add-target', symbol, target_type)
         print_api_debug(f"Response from add-target: Status={status_code}, Result={result}")
         return jsonify(result), status_code
 
@@ -147,7 +161,7 @@ def manage_target_endpoint():
             print_api_debug("Missing symbol in DELETE request.")
             return jsonify({"error": "Missing 'symbol' in request body."}), 400
         
-        result, status_code = run_fetch_script('remove-target', symbol)
+        result, status_code = run_db_script('remove-target', symbol)
         print_api_debug(f"Response from remove-target: Status={status_code}, Result={result}")
         return jsonify(result), status_code
 
@@ -156,11 +170,11 @@ def manage_target_endpoint():
 def toggle_target_status_endpoint(symbol, action):
     print_api_debug(f"Received POST request for /api/target/{symbol}/{action}")
     if action == 'activate':
-        result, status_code = run_fetch_script('activate-target', symbol)
+        result, status_code = run_db_script('activate-target', symbol)
         print_api_debug(f"Response from activate-target: Status={status_code}, Result={result}")
         return jsonify(result), status_code
     elif action == 'deactivate':
-        result, status_code = run_fetch_script('deactivate-target', symbol)
+        result, status_code = run_db_script('deactivate-target', symbol)
         print_api_debug(f"Response from deactivate-target: Status={status_code}, Result={result}")
         return jsonify(result), status_code
     else:
@@ -172,7 +186,7 @@ def toggle_target_status_endpoint(symbol, action):
 @token_required
 def init_db_endpoint():
     print_api_debug("Received request for /api/init-db")
-    result, status_code = run_fetch_script('init-db')
+    result, status_code = run_db_script('init-db')
     print_api_debug(f"Response from /api/init-db: Status={status_code}, Result={result}")
     return jsonify(result), status_code
 
@@ -181,5 +195,161 @@ if __name__ == '__main__':
         print_api_debug("ERROR: API_AUTH_TOKEN environment variable not set.")
         print("ERROR: API_AUTH_TOKEN environment variable not set. Please set it before running the API server.")
         sys.exit(1)
-    print_api_debug("Starting Flask app...")
-    app.run(host='0.0.0.0', port=5000, debug=False)
+
+
+    print_api_debug("Starting Flask app with Gunicorn (HTTPS)...")
+    # Use the virtual environment's python for gunicorn
+    gunicorn_cmd = ["/home/ubuntu/.openclaw/workspace/venv/bin/gunicorn", 
+                    "--certfile", "cert.pem", 
+                    "--keyfile", "key.pem", 
+                    "-b", "0.0.0.0:8000", 
+                    "api_server:app"]
+    subprocess.run(gunicorn_cmd)
+
+# --- New User Authentication Endpoints ---
+
+@app.route('/api/register', methods=['POST'])
+def register_user():
+    print_api_debug("Received request for /api/register")
+    data = request.get_json()
+    username = data.get('username')
+    password = data.get('password')
+    phone_number = data.get('phone_number')
+    email = data.get('email')
+
+    if not username or not password or not phone_number:
+        return jsonify({"error": "Missing username, password, or phone number."}), 400
+
+    hashed_password = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+
+    result, status_code = run_db_script('add-user', username, hashed_password, phone_number, email or "")
+    
+    print_api_debug(f"Response from add-user: Status={status_code}, Result={result}")
+    return jsonify(result), status_code
+
+@app.route('/api/login', methods=['POST'])
+def login_user():
+    print_api_debug("Received request for /api/login")
+    data = request.get_json()
+    username = data.get('username')
+    password = data.get('password')
+
+    if not username or not password:
+        return jsonify({"error": "Missing username or password."}), 400
+
+    user_result, status_code = run_db_script('find-user', username)
+    if status_code != 200 or 'error' in user_result:
+        return jsonify({"error": "Invalid credentials."}), 401
+    
+    user_data = user_result # user_result is already the dict
+
+    if not user_data or not bcrypt.checkpw(password.encode('utf-8'), user_data['password_hash'].encode('utf-8')):
+        print_api_debug(f"Login failed for user: {username}")
+        return jsonify({"error": "Invalid credentials."}), 401
+
+    # Check for TOTP secret first
+    if user_data.get('totp_secret'):
+        print_api_debug(f"User {username} has TOTP enabled. Prompting for TOTP code.")
+        return jsonify({"message": "TOTP enabled. Please provide TOTP code.", "username": username, "two_factor_method": "totp"}), 202
+
+    else:
+        print_api_debug(f"User {username} does not have TOTP enabled. Redirecting to enable TOTP.")
+        return jsonify({"message": "TOTP not enabled. Please enable TOTP first.", "username": username, "two_factor_method": "none"}), 403
+
+
+
+
+
+
+
+
+# --- New TOTP 2FA Endpoints ---
+
+@app.route('/api/enable-totp', methods=['POST'])
+def enable_totp():
+    print_api_debug("Received request for /api/enable-totp")
+    data = request.get_json()
+    username = data.get('username')
+
+    if not username:
+        return jsonify({"error": "Username is required."}), 400
+
+    user_result, status_code = run_db_script('find-user', username)
+    if status_code != 200 or 'error' in user_result:
+        return jsonify({"error": "User not found."}), 404
+    
+    user_data = user_result
+
+    # Generate a new TOTP secret
+    totp_secret = pyotp.random_base32()
+
+    # Update user's TOTP secret in the database
+    update_success = run_db_script('update-user-totp-secret', username, totp_secret)
+    if not update_success:
+        print_api_debug(f"Failed to update TOTP secret for user {username}")
+        return jsonify({"error": "Failed to save TOTP secret."}), 500
+
+    # Generate provisioning URI for QR code
+    # The issuer_name is typically your application name
+    provisioning_uri = pyotp.totp.TOTP(totp_secret).provisioning_uri(
+        name=user_data['email'] or user_data['username'], 
+        issuer_name="TradierMarketDataApp"
+    )
+
+    print_api_debug(f"TOTP secret generated and saved for {username}. Provisioning URI: {provisioning_uri}")
+    return jsonify({"message": "TOTP secret generated.", "secret": totp_secret, "provisioning_uri": provisioning_uri}), 200
+
+@app.route('/api/verify-totp-setup', methods=['POST'])
+def verify_totp_setup():
+    print_api_debug("Received request for /api/verify-totp-setup")
+    data = request.get_json()
+    username = data.get('username')
+    totp_code = data.get('code')
+
+    if not username or not totp_code:
+        return jsonify({"error": "Username and TOTP code are required."}), 400
+
+    user_result, status_code = run_db_script('find-user', username)
+    if status_code != 200 or 'error' in user_result:
+        return jsonify({"error": "User not found."}), 404
+    
+    user_data = user_result
+
+    if not user_data.get('totp_secret'):
+        return jsonify({"error": "TOTP is not enabled for this user."}), 400
+
+    totp = pyotp.TOTP(user_data['totp_secret'])
+    if totp.verify(totp_code):
+        print_api_debug(f"User {username} successfully verified TOTP setup.")
+        return jsonify({"message": "TOTP setup verified successfully."}), 200
+    else:
+        print_api_debug(f"User {username} failed TOTP setup verification.")
+        return jsonify({"error": "Invalid TOTP code."}), 401
+
+@app.route('/api/totp-verify', methods=['POST'])
+def totp_login_verify():
+    print_api_debug("Received request for /api/totp-verify")
+    data = request.get_json()
+    username = data.get('username')
+    totp_code = data.get('code')
+
+    if not username or not totp_code:
+        return jsonify({"error": "Username and TOTP code are required."}), 400
+
+    user_result, status_code = run_db_script('find-user', username)
+    if status_code != 200 or 'error' in user_result:
+        return jsonify({"error": "User not found."}), 404
+    
+    user_data = user_result
+
+    if not user_data.get('totp_secret'):
+        return jsonify({"error": "TOTP is not enabled for this user."}), 400
+    
+    totp = pyotp.TOTP(user_data['totp_secret'])
+    if totp.verify(totp_code):
+        print_api_debug(f"User {username} successfully verified TOTP during login.")
+        # Here, you would issue a JWT or set a session
+        return jsonify({"message": "TOTP verified successfully. User logged in (session/JWT placeholder).", "username": username}), 200
+    else:
+        print_api_debug(f"User {username} failed TOTP verification during login.")
+        return jsonify({"error": "Invalid TOTP code."}), 401
