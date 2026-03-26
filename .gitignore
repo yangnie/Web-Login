@@ -6,3 +6,7 @@ web_interface/node_modules/
 
 # Log files
 *.log
+
+# Certificate files (kept local, not in Git)
+cert.pem
+key.pem
